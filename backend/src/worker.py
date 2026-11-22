@@ -23,11 +23,18 @@ def next_job():
         db.commit()
         try:
             result = analyze(item.snapshot, item.parameters)
-            temp = Path(f'/artifacts/.segment-{item.id}.tmp')
-            temp.write_text(json.dumps(result, ensure_ascii=False))
-            temp.replace(Path(f'/artifacts/segment-{item.id}.json'))
-            item.result = result
-            item.status = Status.COMPLETED
+            if not result.get('balanced'):
+                item.note = '回传四类数量未能对平，请核对凭证台账后重新锁定批次'
+                item.status = Status.FAILED
+            else:
+                item.result = result
+                item.status = Status.COMPLETED
+                try:
+                    temp = Path(f'/artifacts/.segment-{item.id}.tmp')
+                    temp.write_text(json.dumps(result, ensure_ascii=False))
+                    temp.replace(Path(f'/artifacts/segment-{item.id}.json'))
+                except OSError:
+                    logging.exception('Artifact write failed for analysis %s', item.id)
         except ValueError as exc:
             item.note = str(exc)
             item.status = Status.FAILED

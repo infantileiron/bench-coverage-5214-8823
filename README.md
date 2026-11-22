@@ -37,10 +37,29 @@ docker compose exec -T backend python -m scripts.seed_demo
 | db | MySQL 8.0 持久存储区段、发现、补巡单、审计 |
 | redis | Redis 7，由后端与 Worker 使用 |
 
+接口：`POST /api/captures/batch` 登记整批回传（`campaign`、`rows[]`、可选 `client_submission_id`、`resend_of`），`GET /api/captures/summary?campaign=` 取四类汇总与按区段明细，`GET /api/captures/submissions` 看回传批次与重送关系，`GET /api/captures/events` 看补核/判无效轨迹；`backend/tests` 可用 `python -m unittest discover -s tests -t .` 运行。
+
 `.env` 提供各映射端口、`SEED_DEMO`、`NETWORK_SUBNET`、`JWT_SECRET`、`DB_PASSWORD` 和 `MYSQL_ROOT_PASSWORD` 的覆盖入口。数据表与校验见 `backend/src/models` 与 `schemas`，计算见 `backend/src/services/coverage.py`，页面见 `frontend/src/pages`。本地可用 `docker compose exec -T backend python -m compileall src` 检查 Python 模块。角色、任务状态在 `backend/src/constants/enums.py`、`frontend/src/constants/enums.js`、权限和流程页配套定义；照片标签核验状态同时在 `CaptureInput` 与双轮清单页出现。
+
+## 回传台账与四类口径
+
+现场回传先逐条落成**回传凭证**（`capture_submissions` / `capture_receipts`），再按区段归入四类，互斥且不漏：
+
+| 类别 | 含义 | 是否计入估算 |
+|---|---|---|
+| 计入 `counted` | 区段、轮次、座椅编号唯一，标签已核 | 是 |
+| 重复 `duplicate` | 同一轮同一座椅已登记，或整批重送 | 否，保留原凭证指向 |
+| 待核 `pending` | 已登记，照片标签尚未确认 | 否，补核后转入计入 |
+| 无效 `invalid` | 字段不合法、区段未登记，或人工判为无效 | 否，保留原因 |
+
+- **原始回传总数 = 计入 + 重复 + 待核 + 无效**，页面、补巡单和导出 CSV 都给出按区段的计入数、排除数与待核数，并显示“四类对账：已对平”。
+- 同一轮同一座椅只计一次：单条重试、带 `client_submission_id` 的同批重试、整批重送都不会新增计数；重送通过内容指纹自动挂回原批次（`resend_of`），也可显式指定。
+- 补核（确认实物）或判无效都写入 `capture_events` 轨迹；锁定估算后快照冻结当时的凭证、四类归类、回传批次与核对轨迹，后续变动需重新锁定批次才会进入新补巡单。
+- 不合格的行不会让整批 422；它们成为“无效”凭证并写明原因，因此条数始终对得上。
+- 历史台账（先有发现、尚无凭证）在首次读取时一次性补建凭证（`legacy-<批次>`），保证旧批次同样可对账。
 
 ## 计算口径
 
-按批次、区段、轮次和唯一实物标签记录。同一轮的同一标签重复写入会阻断；跨轮合并以交集 `m` 和并集计算。Chapman 点估计为 `(nA+1)(nB+1)/(m+1)-1`，使用 Chapman 方差公式。漏查估计为总量减实见，并按分段结果排序。已确认独立样本、区段封闭、标签全部核对且重合数达到门槛后才输出数值。共享巡查路径、材质或位置导致可见性不均会偏置估计。项目使用固定模拟清单，快照保留计算时口径；建议按报告复查，派发表在系统中签核后可下载，现场派单仍由班组执行。
+按批次、区段、轮次和唯一实物标签记录。只有“计入”凭证进入双轮标签集合，跨轮合并以交集 `m` 和并集计算。Chapman 点估计为 `(nA+1)(nB+1)/(m+1)-1`，使用 Chapman 方差公式。漏查估计为总量减实见，并按分段结果排序。已确认独立样本、区段封闭、无待核与无效回传且重合数达到门槛后才输出数值；未达标区段仍列出四类明细，不丢记录。共享巡查路径、材质或位置导致可见性不均会偏置估计。项目使用固定模拟清单，快照保留计算时口径；建议按报告复查，派发表在系统中签核后可下载，现场派单仍由班组执行。
 
 MIT License，见 `LICENSE`。

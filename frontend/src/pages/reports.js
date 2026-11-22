@@ -7,6 +7,9 @@ import {onForm} from '../hooks/forms.js';
 import {session} from '../stores/session.js';
 import {h} from '../utils/html.js';
 
+const columns = ['区段编号', '区段', '原始回传', '计入', '重复', '待核', '无效', '排除',
+  'A 轮', 'B 轮', '重合', '合并实见', '估计总量', '估计漏查', '估计方差', '建议'];
+
 export async function reports(id) {
   const list = await api.analyses();
   const run = id || list.length ? await api.analysis(id || list[0].id) : null;
@@ -17,10 +20,21 @@ export async function reports(id) {
     content = `<h2>${h(run.title)}</h2><p class="state">${h(states[run.status])}</p>`;
     if (output) {
       const rows = output.rows;
-      const columns = ['区段','A 轮','B 轮','重合','合并实见','估计总量','估计漏查','估计方差','建议'];
+      const totals = output.totals || {};
+      const submissions = output.submissions || [];
+      const trace = output.events || [];
       content += `${metrics(output.metrics)}<p class="decision">${h(output.summary)}</p>
-        <h3>按区段的实见与漏查</h3><div class="tall">${table(columns, rows.map(row => columns.map(key => row[key])))}</div>
+        <h3>各区段计入、排除与待核</h3><div class="tall">${table(columns, rows.map(row => columns.map(key => row[key])))}</div>
+        <h3>回传批次与整批重送</h3>${table(['批次', '收到时间', '提交编号', '挂到原批次', '原始回传', '计入', '重复', '待核', '无效', '排除'],
+          submissions.map(x => [x.id.slice(0, 8), x.received_at, x.client_submission_id || '—',
+            x.resend_of ? x.resend_of.slice(0, 8) : '—', x.received, x.counted, x.duplicate, x.pending, x.invalid, x.excluded]),
+          '该快照没有回传批次记录。')}
+        <h3>补核与判无效轨迹</h3>${table(['时间', '区段 · 轮次', '座椅编号', '动作', '原状态', '新状态', '说明'],
+          trace.map(x => [x.recorded_at, `${x.segment_code} · ${x.round_code}`, x.asset_code,
+            x.action === 'verify' ? '补核确认' : '判为无效', states[x.from_state] || x.from_state,
+            states[x.to_state] || x.to_state, x.note]), '该快照没有补核或判无效记录。')}
         <ul class="notes">${output.notes.map(note => `<li>${h(note)}</li>`).join('')}</ul>
+        <p class="notes">四类对账：原始回传 ${h(totals.received ?? 0)} = 计入 ${h(totals.counted ?? 0)} + 重复 ${h(totals.duplicate ?? 0)} + 待核 ${h(totals.pending ?? 0)} + 无效 ${h(totals.invalid ?? 0)}。</p>
         ${run.note ? `<p class="signed">签核意见 · ${h(run.note)}</p>` : ''}<button class="secondary" id="export">下载补巡派发表</button><p id="export-error" role="alert"></p>`;
       if (session()?.role === 'manager' && run.status === 'completed') content += `<form id="publish-form"><label>签核意见<input name="note" required minlength="3"></label><button type="submit">签核派发</button><p role="alert"></p></form>`;
     } else {

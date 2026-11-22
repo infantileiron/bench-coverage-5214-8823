@@ -4,10 +4,18 @@ from sqlalchemy import select
 from src.config.database import get_db
 from src.controllers.auth import current, login, manager, writable
 from src.controllers.export import export
-from src.models.entities import Analysis, Audit, Segment, Capture
-from src.schemas.business import AnalysisInput, SegmentInput, CaptureInput, Login, Publication
+from src.models.entities import Analysis, Audit, Capture, Segment
+from src.schemas.business import (
+    AnalysisInput,
+    CaptureBatchInput,
+    CaptureDecision,
+    CaptureInput,
+    Login,
+    Publication,
+    SegmentInput,
+)
 from src.services import business as svc
-from src.services.coverage import capture_counts, group_captures
+from src.services import ledger
 
 router = APIRouter(prefix='/api')
 
@@ -33,30 +41,47 @@ def create_segment(data: SegmentInput, db=Depends(get_db), user=Depends(writable
 
 
 @router.get('/captures')
-def captures(campaign: str | None = None, segment_code: str | None = None, db=Depends(get_db), user=Depends(current)):
-    query = select(Capture).order_by(Capture.id.desc())
-    if campaign:
-        query = query.where(Capture.campaign == campaign)
-    if segment_code:
-        query = query.where(Capture.segment_code == segment_code)
-    return [svc.record(item) for item in db.scalars(query)]
+def captures(campaign: str | None = None, segment_code: str | None = None,
+             classification: str | None = None, db=Depends(get_db), user=Depends(current)):
+    if not campaign:
+        return [svc.record(item) for item in db.scalars(select(Capture).order_by(Capture.id.desc()))]
+    rows = ledger.receipt_rows(db, campaign, segment_code)
+    if classification:
+        rows = [row for row in rows if row['classification'] == classification]
+    return rows
 
 
 @router.get('/captures/summary')
-def summary(campaign: str, segment_code: str, db=Depends(get_db), user=Depends(current)):
-    query = select(Capture).where(Capture.campaign == campaign, Capture.segment_code == segment_code)
-    captures = (svc.record(item) for item in db.scalars(query))
-    return capture_counts(group_captures(captures)[segment_code])
+def summary(campaign: str, segment_code: str | None = None, db=Depends(get_db), user=Depends(current)):
+    return ledger.counts(db, campaign, segment_code)
+
+
+@router.get('/captures/submissions')
+def submissions(campaign: str, db=Depends(get_db), user=Depends(current)):
+    return {'submissions': ledger.submission_rows(db, campaign),
+            'totals': ledger.counts(db, campaign)}
+
+
+@router.get('/captures/events')
+def capture_events(campaign: str, db=Depends(get_db), user=Depends(current)):
+    return ledger.events(db, campaign)
 
 
 @router.post('/captures', status_code=201)
 def create_capture(data: CaptureInput, db=Depends(get_db), user=Depends(writable)):
-    return svc.save_input(db, Capture, data, user)
+    return svc.save_input(db, 'capture', data, user)
+
+
+@router.post('/captures/batch', status_code=201)
+def create_capture_batch(data: CaptureBatchInput, db=Depends(get_db), user=Depends(writable)):
+    return ledger.ingest(db, user, data.campaign, [row.model_dump() for row in data.rows],
+                         client_submission_id=data.client_submission_id, resend_of=data.resend_of)
 
 
 @router.post('/captures/{id}/verify')
-def verify_capture(id: int, db=Depends(get_db), user=Depends(writable)):
-    return svc.verify_capture(db, id, user)
+def verify_capture(id: int, data: CaptureDecision | None = None, db=Depends(get_db), user=Depends(writable)):
+    decision = data or CaptureDecision()
+    return svc.verify_capture(db, id, user, state=decision.state, note=decision.note)
 
 
 @router.get('/analyses')

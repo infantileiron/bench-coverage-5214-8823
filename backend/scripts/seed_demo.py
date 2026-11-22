@@ -4,6 +4,7 @@ from sqlalchemy import func, select
 from src.config.database import Base, Session, engine
 from src.constants.enums import Role, Status
 from src.models.entities import Analysis, Capture, Segment, User
+from src.services import ledger
 from src.services.business import record
 from src.utils.security import password_hash
 
@@ -35,12 +36,14 @@ def seed():
                         state = 'unverified' if (code,cycle,number) == ('BANK-04','B',17) else 'verified'
                         db.add(Capture(segment_code=code, campaign=CODE, round_code=cycle, asset_code=asset, state=state))
         db.flush()
+        ledger.ensure_receipts(db, CODE)
+        db.flush()
         title = '周末早班 · 滨江补巡清单'
         if not db.scalar(select(Analysis).where(Analysis.title == title)):
             owner = db.scalar(select(User).where(User.role == Role.ANALYST))
             params = {'campaign':CODE,'min_overlap':5,'verified_independence':True,
                       'segments':[record(row) for row in db.scalars(select(Segment).order_by(Segment.code))]}
-            snapshot = [record(row) for row in db.scalars(select(Capture).where(Capture.campaign == CODE))]
+            snapshot = ledger.snapshot(db, CODE)
             db.add(Analysis(title=title, status=Status.QUEUED, author_id=owner.id, parameters=params, snapshot=snapshot, result=None))
         db.commit()
         return {model.__tablename__: db.scalar(select(func.count()).select_from(model))

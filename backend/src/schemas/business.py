@@ -19,11 +19,32 @@ class SegmentInput(CleanInput):
 
 
 class CaptureInput(CleanInput):
-    segment_code: str = Field(pattern=r'^[A-Z0-9-]{2,32}$')
+    """单条登记也走凭证台账：字段不合法时落为“无效”凭证，而不是整条丢失。"""
+    segment_code: str = Field(max_length=64)
     campaign: str = Field(pattern=r'^[A-Z0-9-]{2,32}$')
-    round_code: Literal['A', 'B']
-    asset_code: str = Field(pattern=r'^[A-Z0-9-]{2,40}$')
-    state: Literal['verified', 'unverified']
+    round_code: str = Field(default='', max_length=8)
+    asset_code: str = Field(default='', max_length=80)
+    state: str = Field(default='verified', max_length=16)
+
+
+class CaptureRow(CleanInput):
+    """整批回传的原始行。字段只做宽松收口，不合格的行落为“无效”凭证，不整批丢弃。"""
+    segment_code: str = Field(default='', max_length=64)
+    round_code: str = Field(default='', max_length=8)
+    asset_code: str = Field(default='', max_length=80)
+    state: str = Field(default='verified', max_length=16)
+
+
+class CaptureBatchInput(CleanInput):
+    campaign: str = Field(pattern=r'^[A-Z0-9-]{2,32}$')
+    rows: list[CaptureRow] = Field(min_length=1, max_length=1000)
+    client_submission_id: str | None = Field(default=None, pattern=r'^[A-Za-z0-9._:-]{1,64}$')
+    resend_of: str | None = Field(default=None, max_length=64)
+
+
+class CaptureDecision(CleanInput):
+    state: Literal['verified', 'invalid'] = 'verified'
+    note: str = Field(default='', max_length=300)
 
 
 class AnalysisInput(CleanInput):
